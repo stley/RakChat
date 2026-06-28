@@ -7,6 +7,7 @@
 #include "RakNetTypes.h"  // MessageID
 
 
+#define INVALID_CHANNEL_ID  65535
 
 #if !defined RKC_MAX_CLIENTS
     #define RKC_MAX_CLIENTS (64);
@@ -26,5 +27,8 @@ enum GameMessages
     // + uchar 'P' - peerlist
     // // + uchar 'C' - channellist
     ID_CHANNEL_ACTION,
-    ID_COMMAND
+    ID_COMMAND,
+    ID_USER_UPDATE
+    // uchar 'Q' USER QUITTED
+    // uchar 'J' JOIN
 };

@@ -39,10 +39,10 @@ void SpeakeasyEngine::OnAudioInput(int16_t* pcm, unsigned long frameCount)
 {
     if (frameCount != DEFAULT_FRAMES_PER_BUFFER) return;
 
+    VoiceBuffer toPush;
+    memcpy(toPush.data_, pcm, sizeof(toPush.data_));
     {
         std::lock_guard<std::mutex> lock(captureMutex);
-        VoiceBuffer toPush;
-        memcpy(toPush.data_, pcm, sizeof(toPush.data_));
         captureQueue.push(toPush);
     }
 }

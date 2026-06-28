@@ -54,7 +54,6 @@ protected:
     ConnectionConfig config_;
     RakNet::RakPeerInterface *peer;
     SocketDescriptor sd;
-    RakNet::Packet* packet;
     std::thread workerThread;
     std::atomic<bool> running_ = false;
     std::atomic<bool> connected_ = false;

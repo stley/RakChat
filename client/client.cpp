@@ -14,7 +14,6 @@ std::atomic<bool> clientInit{ true };
 
 RakChatClient::RakChatClient()
 {
-    packet = nullptr;
     peer = RakNet::RakPeerInterface::GetInstance();
     peer->Startup(1, &sd, 1);
     printf("RakChat Client started.\n");
@@ -39,7 +38,7 @@ void RakChatClient::ClientThread()
     //printf("Packet thread: It's on! :)\n");
     while(running_)
     {
-        for (packet=peer->Receive(); packet; peer->DeallocatePacket(packet), packet=peer->Receive())
+        for (auto* packet = peer->Receive(); packet; peer->DeallocatePacket(packet), packet=peer->Receive())
 		{
 			switch (packet->data[0])
 			{

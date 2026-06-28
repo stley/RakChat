@@ -7,12 +7,10 @@ static ExtendedClient* clientPtr = nullptr;
 
 ExtendedClient::ExtendedClient()
 {
-    packet = nullptr;
     peer = RakNet::RakPeerInterface::GetInstance();
     peer->Startup(1, &sd, 1);
     peer->AttachPlugin(&rpc4);
     clientPtr = this;
-    printf("RPC REGISTRATION");
     rpcRegister();
 }
 ExtendedClient::~ExtendedClient()
@@ -43,6 +41,8 @@ void rpcUserInfo(RakNet::BitStream* userData, RakNet::Packet* packet)
     userData->Read(user_channel);
     userData->Read(user_name);
 
+    printf("PushUser: %d %d %s\n", user_id, user_channel, user_name.C_String());
+
     clientPtr->PushUser(user_id, user_channel, user_name.C_String());
 }
 void rpcChannelInfo(RakNet::BitStream* userData, RakNet::Packet* packet)
@@ -52,28 +52,26 @@ void rpcChannelInfo(RakNet::BitStream* userData, RakNet::Packet* packet)
         printf("invalid client pointer"); 
         return;
     }
-        
 
     uint16_t channel_id;
+    bool hasParent = false;
     uint16_t channel_parent;
     RakString channel_name;
     userData->Read(channel_id);
+    userData->Read(hasParent);
     userData->Read(channel_parent);
     userData->Read(channel_name);
 
-    printf("RPC4: %d %d %s", channel_id, channel_parent, channel_name.C_String());
+    printf("PushChannel: %d %d %s\n", channel_id, channel_parent, channel_name.C_String());
 
-    clientPtr->PushChannel(channel_id, channel_parent, channel_name.C_String());
+    clientPtr->PushChannel(channel_id, hasParent, channel_parent, channel_name.C_String());
 }
 
 void ExtendedClient::rpcRegister()
 {
-    printf("Registering RPCS");
     rpc4.RegisterSlot("ChannelInfo", &rpcChannelInfo, 1);
     rpc4.RegisterSlot("UserInfo", &rpcUserInfo, 1);
-    printf("RPCS registered");
 }
-
 
 void ExtendedClient::ClientConfigure(const char* ip, unsigned short port, const char* username)
 {
@@ -90,24 +88,23 @@ void ExtendedClient::ClientConnect()
     peer->Connect(config_.serverIp.c_str(), config_.serverPort, nullptr, 0);
     std::cout << "peer->Connect()\n";
     running_ = true;
+    if (workerThread.joinable())
+        workerThread.join();
     workerThread = std::thread(&ExtendedClient::ClientThread, this);
     return;
 }
 
 void ExtendedClient::ClientThread()
 {
-    //ConsolePrint("Packet thread: It's on! :)\n");
+    std::cout << "Packet thread: It's on! :)\n";
     while(running_)
     {
-        for (packet=peer->Receive(); packet; peer->DeallocatePacket(packet), packet=peer->Receive())
+        bool working = false;
+        for (auto* packet=peer->Receive(); packet; peer->DeallocatePacket(packet), packet=peer->Receive())
 		{
+            working = true;   
 			switch (packet->data[0])
 			{
-                /*case ID_RPC:
-                {
-                    rpc4.OnReceive(packet);
-                    break;
-                }*/
                 case ID_REGISTER_ME:
                 {
                     BitStream bs = BitStream(packet->data, packet->length, false);
@@ -128,15 +125,17 @@ void ExtendedClient::ClientThread()
                     {
                         state_ = RegistrationFailed;
                         ConsolePrint("Registration failed because name is in use.\n");
-                        clientInit = true;
-                        return;
+                        running_ = false;
+    
+                        break;
                     }
                     else
                     {
                         state_ = RegistrationFailed;
                         ConsolePrint("Registration failed.");
-                        clientInit = true;
-                        return;
+                        running_ = false;
+    
+                        break;
                     }
                     break;
                 }
@@ -156,23 +155,26 @@ void ExtendedClient::ClientThread()
                 case ID_CONNECTION_LOST:
                 {
                     ConsolePrint("Connection lost.\n");
-                    clientInit = true;
-                    return;
+                    running_ = false;
+
+                    break;
                 }
 
 				case ID_CONNECTION_ATTEMPT_FAILED:
                 {
                     state_ = FailedConnection;
                     ConsolePrint("Failed to connect to server.\n");
-                    clientInit = true;
-                    return;
+                    running_ = false;
+
+                    break;
                 }
 
                 case ID_DISCONNECTION_NOTIFICATION:
                 {
                     ConsolePrint("Connection dropped, probably by the server.\n");
-                    clientInit = true;
-                    return;
+                    running_ = false;
+
+                    break;
                 }
                     
 
@@ -191,6 +193,9 @@ void ExtendedClient::ClientThread()
 
                     {
                         std::lock_guard<std::mutex> lock(queueMutex);
+                        if(MessageQueue.size() >= 500)
+                            MessageQueue.pop_front();
+
                         MessageQueue.push_back(message);
                         consoleBufUpdated = true;
                     }
@@ -209,6 +214,8 @@ void ExtendedClient::ClientThread()
                     message.messageContent = rs_msg.C_String();
                     {
                         std::lock_guard<std::mutex> lock(queueMutex);
+                        if(MessageQueue.size() >= 500)
+                            MessageQueue.pop_front();
                         MessageQueue.push_back(message);
                     }
                     break;
@@ -220,7 +227,8 @@ void ExtendedClient::ClientThread()
 			        break;
                 }
     		        
-                case ID_VOICE_DATA: {
+                case ID_VOICE_DATA:
+                {
                     if(voiceEngine)
                     {
                         if (voiceEngine->GetState() != ENGINE_OK)
@@ -259,12 +267,49 @@ void ExtendedClient::ClientThread()
                     voiceEngine->OnNetworkVoice(userid, buf, size, fromNome.C_String());
                     break;
                 }
+                case ID_USER_UPDATE:
+                {
+                    BitStream bsIn = BitStream(packet->data, packet->length, false);
+                    bsIn.IgnoreBytes(sizeof(RakNet::MessageID));
+                    unsigned char action = 'X';
+                    uint16_t quitter = 0;
+                    if (!bsIn.Read(action)) break;
+                    if (!bsIn.Read(quitter) || quitter == 0) break;
+                    switch (action)
+                    {
+                        case 'Q':
+                        {
+                            std::lock_guard<std::mutex> lock(pMapMutex_);
+                            if (auto it = PeerMap.find(quitter); it != PeerMap.end())
+                            {
+                                PeerMap.erase(quitter);
+                            }
+                            break;
+                        }
+                        case 'J':
+                        {
+                            uint16_t newUserChannel;
+                            if (!bsIn.Read(newUserChannel)) break;
+                            std::lock_guard<std::mutex> lock(pMapMutex_);
+                            if (auto it = PeerMap.find(quitter); it != PeerMap.end())
+                            {
+                                User n = it->second;
+                                n.channelId = newUserChannel;
+                                PeerMap.insert_or_assign(quitter, n);
+                            }
+                        }
+                        break;
+                    }
+
+                }
+
 			    default:
 			        break;
 
             }
-        } 
-        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+        if(!working)
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
 }
 
@@ -278,7 +323,7 @@ void ExtendedClient::ProcessSlashCommand(const std::string& cmdtext)
     else if(cmdtext.find("/exit") == 0)
     {
         ConsolePrint("Disconnecting from server...");
-        clientInit = true;
+
         running_ = false;
         connected_ = false;
         if (voiceEngine)
@@ -375,7 +420,7 @@ void ExtendedClient::ProcessSlashCommand(const std::string& cmdtext)
 
     else
     {
-        BitStream cmdStream = BitStream();
+        BitStream cmdStream;
         RakString rsCMD(cmdtext.c_str());
         cmdStream.Write(static_cast<RakNet::MessageID>(ID_COMMAND));
         cmdStream.Write(rsCMD);
@@ -392,7 +437,7 @@ void ExtendedClient::SendMessage(const char* message)
     }
     else
     {
-        BitStream bsOut = BitStream();
+        BitStream bsOut;
         bsOut.Write(static_cast<RakNet::MessageID>(ID_CHAT_MESSAGE));
         bsOut.Write(message);
         peer->Send(&bsOut, HIGH_PRIORITY, RELIABLE_ORDERED, 0, serverAddress, false);    

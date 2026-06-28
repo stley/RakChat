@@ -1,6 +1,9 @@
 #pragma once
 #include "RakNetTypes.h"
 #include "PacketPriority.h"
+#include "RPC4Plugin.h"
+#include <utility>
+#include <mutex>
 #include <unordered_map>
 #include <vector> 
 #include <string>
@@ -8,7 +11,7 @@ using namespace RakNet;
 
 struct RakChatUser
 {
-    RakChatUser(RakPeerInterface* peer);
+    RakChatUser(RakPeerInterface* peer, RPC4* RPCinstance);
     std::string Name;
     RakNet::SystemAddress userAddr;
     RakNet::RakNetGUID userGUID;
@@ -22,8 +25,11 @@ struct RakChatUser
     void PushSystemMessage(const char* message) const;
     void SendBitStream(const BitStream* bs) const;
     void SendBitStream(const BitStream* bs, PacketPriority priority, PacketReliability reliability, char orderingChannel, RakChatUser* exclude) const;
+    void RPCCall(const char* identifier, const BitStream* bs) const;
+    void RPCCall(const char* identifier, const BitStream* bs, PacketPriority priority, PacketReliability reliability, char orderingChannel, RakChatUser* exclude) const;
 private:
-    RakPeerInterface* peer;
+    RakPeerInterface* peer = nullptr;
+    RPC4* remote = nullptr;
 };
 
 
@@ -46,11 +52,22 @@ public:
     RakChatUser* get(uint16_t userid);
     RakChatUser* get(const RakNet::RakNetGUID& guid);
     RakChatUser* get(const RakNet::SystemAddress& systemAddress);
-    void BroadcastSystemMessage(const char* message, const RakNetGUID& exclude = UNASSIGNED_RAKNET_GUID) const;
-    void BroadcastBitStream(const BitStream* bs, const RakNetGUID& exclude = UNASSIGNED_RAKNET_GUID) const;
-    [[nodiscard]] const std::unordered_map<uint16_t, RakChatUser>& GetPeerList() const { return connectionList_; }
+    void BroadcastSystemMessage(const char* message, const RakNetGUID& exclude = UNASSIGNED_RAKNET_GUID);
+    void BroadcastBitStream(const BitStream* bs, const RakNetGUID& exclude = UNASSIGNED_RAKNET_GUID);
+    void BroadcastRPCCall(const char* identifier, const BitStream* bs, const RakNetGUID& exclude);
+    
+    [[nodiscard]] std::vector<std::pair<uint16_t, RakChatUser*>> GetPeerList() const 
+    {
+      std::lock_guard<std::mutex> lock(connectionList_mutex);
+      std::vector<std::pair<uint16_t, RakChatUser*>> list;
+      list.reserve(connectionList_.size());
+      for (const auto& [id, user] : connectionList_)
+          list.emplace_back(id, user.get());
+      return list;
+    }
 private:
     uint16_t nextId = 1;
     std::vector<uint16_t> freeIds;
-    std::unordered_map<uint16_t, RakChatUser> connectionList_;
+    std::unordered_map<uint16_t, std::unique_ptr<RakChatUser>> connectionList_;
+    mutable std::mutex connectionList_mutex;
 };

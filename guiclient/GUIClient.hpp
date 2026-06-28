@@ -37,10 +37,7 @@ private:
     void ProcessGUI();
 public:
     void Resize(int width, int height);
-    GUIClient()
-    {
-        under_ = std::make_unique<ExtendedClient>();
-    }
+    GUIClient(){ under_ = std::make_unique<ExtendedClient>(); }
     ~GUIClient() = default;
 
     void Initialize();

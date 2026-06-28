@@ -4,6 +4,7 @@
 
 struct Channel
 {
+    bool hasParent = false;
     uint16_t channelParent;
     std::string channelName;
 };
@@ -22,14 +23,10 @@ protected:
     std::deque<ChatMessage> MessageQueue;
     std::unordered_map<uint16_t, Channel> ChannelMap;
     std::unordered_map<uint16_t, User> PeerMap;
-    
-
+    std::atomic<bool> consoleBufUpdated {false};
 
     RPC4 rpc4;
 
-    
-
-    std::atomic<bool> consoleBufUpdated {false};
     void ClientMain() override { };
     void rpcRegister();
 public:
@@ -96,7 +93,7 @@ public:
             }  
             localbuf.pop_front();
         }
-        return buffstring.data();
+        return buffstring.c_str();
     }
 
     bool PollBuff()
@@ -109,21 +106,28 @@ public:
 
     std::unordered_map<uint16_t, Channel>& GetChannels() { return ChannelMap; };
     std::unordered_map<uint16_t, User>& GetUsers() { return PeerMap; };
-    void PushChannel(uint16_t channelId, uint16_t parentId, const char* channelname)
+    void PushChannel(uint16_t channelId, bool hasParent, uint16_t parentId, const char* channelname)
     {
         Channel inC;
+        inC.hasParent = hasParent;
         inC.channelParent = parentId;
-        inC.channelName = channelname;    
-        ChannelMap.emplace(channelId, inC);
+        inC.channelName = channelname;
+        {
+            std::lock_guard<std::mutex> lock(cMapMutex_);
+            ChannelMap.insert_or_assign(channelId, inC);
+        }
     }
     void PushUser(uint16_t userid, uint16_t channelid, const char* username)
     {
         User inU;
         inU.channelId = channelid;
         inU.UserName = username;
-        PeerMap.emplace(userid, inU);
+        {
+            std::lock_guard<std::mutex> lock(pMapMutex_);
+            PeerMap.insert_or_assign(userid, inU);
+        }
     }
-    void Dropuser(uint16_t peerId);
+    void DropUser(uint16_t peerId);
     void SendMessage(const char* message);
     void SendPacket(RakNet::BitStream* bs, PacketPriority priority, PacketReliability reliability, char orderingChannel)
     {
@@ -134,6 +138,14 @@ public:
         if (voiceEngine)
             return voiceEngine->GetDevice()->Mute();
         return false;
+    }
+    void JoinChannel(uint16_t cid)
+    {
+        RakNet::BitStream bs = BitStream();
+        bs.Write((RakNet::MessageID)ID_CHANNEL_ACTION);
+        bs.Write((unsigned char)'J'); //join
+        bs.Write(cid);
+        SendPacket(&bs, HIGH_PRIORITY, RELIABLE_ORDERED, 0);
     }
 };
 

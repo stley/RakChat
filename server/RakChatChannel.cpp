@@ -8,10 +8,12 @@ using namespace RakNet;
 
 
 
-RakChatChannel::RakChatChannel(const char* name, const char* password, uint32_t capacity)
+RakChatChannel::RakChatChannel(const char* name, RakChatChannel* parent, const char* password, uint32_t capacity)
 {
     name_ = name;
     capacity_ = capacity;
+    if (parent)
+        channel_parent = parent;
     if (password)
         password_ = password;
 }
@@ -31,11 +33,15 @@ bool RakChatChannel::JoinChannel(RakChatUser* user)
     printf("Patching %s to channel %s.\n", user->Name.c_str(), this->Name().c_str());
     if (!IsUserInChannel(user))
     {
-        users_.insert(user);
+        {
+            std::lock_guard<std::mutex> lock(pSetMutex);
+            users_.insert(user);
+        }
         std::string msg = "You joined channel \"";
         msg += name_.c_str();
         msg += "\".";
         user->PushSystemMessage(msg.c_str());
+        return true;
     }
     return false;
 }
@@ -45,7 +51,14 @@ bool RakChatChannel::LeaveChannel(RakChatUser* user, uint8_t type)
     printf("Dropping %s from channel %s.\n", user->Name.c_str(), this->Name().c_str());
     if (IsUserInChannel(user))
     {
-        users_.erase(user);
+        {
+            std::lock_guard<std::mutex> lock(pSetMutex);
+            users_.erase(user);
+        }
+
+        if ( type == LEAVE_DROP )
+            return true;
+
         std::string msg = "You left channel \"";
         msg += name_.c_str();
         msg += "\".";
@@ -57,7 +70,12 @@ bool RakChatChannel::LeaveChannel(RakChatUser* user, uint8_t type)
 
 void RakChatChannel::Broadcast(const BitStream* bs) const
 {
-    for (const auto usr : users_ )
+    std::unordered_set<RakChatUser*> snapshot;
+    {
+        std::lock_guard<std::mutex> lock(pSetMutex);
+        snapshot = users_;
+    }
+    for (const auto usr : snapshot )
     {
         usr->SendBitStream(bs);
     }
@@ -65,13 +83,18 @@ void RakChatChannel::Broadcast(const BitStream* bs) const
 
 void RakChatChannel::Broadcast(const BitStream* bs, PacketPriority priority, PacketReliability reliability, char orderingChannel, RakChatUser* from) const
 {
-    for (const auto usr : users_ )
+    std::unordered_set<RakChatUser*> snapshot;
+    {
+        std::lock_guard<std::mutex> lock(pSetMutex);
+        snapshot = users_;
+    }
+    for (const auto usr : snapshot )
     {
         usr->SendBitStream(bs, priority, reliability, orderingChannel, from);
     }
 }
 
-uint16_t ChannelPool::CreateChannel(const RakChatChannel& channel)
+uint16_t ChannelPool::CreateChannel(const char* name, RakChatChannel* parent, const char* password, uint32_t capacity)
 {
     uint16_t id = 0;
 
@@ -85,7 +108,7 @@ uint16_t ChannelPool::CreateChannel(const RakChatChannel& channel)
         id = nextId++;
     }
 
-    channels_.emplace(id, channel);
+    channels_.emplace(std::piecewise_construct, std::forward_as_tuple(id), std::forward_as_tuple(name, parent, password, capacity));
 
     return id;
 }

@@ -1,6 +1,7 @@
 #include "GUIClient.hpp"
 //#include "BitStream.h"
 #include <algorithm>
+#include <functional>
 
 static int text_height(mu_Font font) {
   return r_get_text_height();
@@ -49,25 +50,6 @@ void GUIClient::Initialize()
         return;
     }
     r_init();
-    //assert(window_ != nullptr);
-
-    //window_ = SDL_CreateWindow( "Speakeasy", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, 800, 600, SDL_WINDOW_OPENGL | SDL_WINDOW_SHOWN);
-    
-
-    
-
-    //context_ = SDL_GL_CreateContext(window_);
-    //if (!gladLoadGLLoader((GLADloadproc)SDL_GL_GetProcAddress))
-    /*{
-        std::cout << "Failed to init GLAD\n";
-        return;
-    }*/
-    /*if (!window_)
-    {
-        std::cout << "SDL_CreateWindow Error: " << SDL_GetError() << "\n";
-        return;
-    }*/
-    
     ctx = static_cast<mu_Context*>(malloc(sizeof(mu_Context)));
 
     mu_init(ctx);
@@ -141,12 +123,10 @@ void GUIClient::ProcessGUI()
         
         case FailedConnection:
         {
-            under_ = std::make_unique<ExtendedClient>();
             PromptInitWindow(); break;
         }
         case RegistrationFailed:
         {
-            under_ = std::make_unique<ExtendedClient>();
             PromptInitWindow(); break;
         }
         case Init:
@@ -166,9 +146,17 @@ void GUIClient::PromptInitWindow()
     {
         case Connecting: break;
         case Init: winTitle = "Speakeasy Client"; break;
-        case FailedConnection: winTitle = "Connection failed!"; break;
+        case FailedConnection:
+        { 
+            winTitle = "Connection failed!";
+            break;
+        } 
+        case RegistrationFailed:
+        { 
+            winTitle = "Registration Failed.";
+            break; 
+        } 
         case Registering: winTitle = "Connection established. Registering..."; break;
-        case RegistrationFailed: winTitle = "Registration Failed."; break;
     }
 
     Resize(300, 300);
@@ -225,6 +213,8 @@ void GUIClient::PromptInitWindow()
     mu_end_window(ctx);
 }
 
+
+
 void GUIClient::PromptMainWindow()
 {
     Resize(800, 600);
@@ -232,10 +222,19 @@ void GUIClient::PromptMainWindow()
     if (mu_begin_window_ex(ctx, "", mu_rect(0, 0, 800, 600), MU_OPT_NORESIZE | MU_OPT_NOINTERACT | MU_OPT_NOSCROLL | MU_OPT_NOTITLE))
     {
         mu_layout_row(ctx, 1, std::array<int, 1>{0}.data(), 0);
-        if (mu_button(ctx, "Mute"))
+        if (mu_button(ctx, "Sound"))
         {
-            bool state = under_->Mute();
-            under_->ConsolePrint("%s", (state) ? "Muted." : "Unmuted.");
+            mu_open_popup(ctx, "soundoptionspopup");
+
+        }
+        if (mu_begin_popup(ctx, "soundoptionspopup"))
+        {
+            if (mu_button(ctx, "Mute"))
+            {
+                bool state = under_->Mute();
+                under_->ConsolePrint("%s", (state) ? "Muted." : "Unmuted.");
+            }
+            mu_end_popup(ctx);
         }
         mu_layout_row(ctx, 1, std::array<int, 1>{-1}.data(), -200);
         mu_begin_panel(ctx, "Channel list");
@@ -244,24 +243,83 @@ void GUIClient::PromptMainWindow()
             std::lock_guard<std::mutex> lock(under_->cMapMutex_);
             localChannelMap = under_->GetChannels();
         }
-        for (const auto& [cid, chan] : localChannelMap)
+        std::unordered_map<uint16_t, User> localUserMap;
         {
-            mu_push_id(ctx, &cid, sizeof(cid));
-            mu_layout_row(ctx, 3, std::array<int, 3>{-250, 0, 0}.data(), 0);
-            mu_label(ctx, chan.channelName.c_str());
-            if (mu_button(ctx, "Join"))
-            {
-                RakNet::BitStream bs = BitStream();
-                bs.Write((RakNet::MessageID)ID_CHANNEL_ACTION);
-                bs.Write((unsigned char)'J'); //join
-                bs.Write(cid);
-                under_->SendPacket(&bs, HIGH_PRIORITY, RELIABLE_ORDERED, 0);
-            }
+            std::lock_guard<std::mutex> lock(under_->pMapMutex_);
+            localUserMap = under_->GetUsers();
+        }
+
+        std::function<void(uint16_t)> renderChannel;
+        int depth = 0;
+        std::function<void(uint16_t, uint16_t)> renderUser;
+        renderUser = [&](uint16_t uid, uint16_t channel_id)
+        {
+            const User& usr = localUserMap.at(uid);
+            mu_push_id(ctx, &uid, sizeof(uid));
+            mu_push_id(ctx, &channel_id, sizeof(channel_id));
+            mu_layout_row(ctx, 2, std::array<int, 2>{-180, 0}.data(), 0);
+            //printf("renderUser: uid=%d name='%s'\n", uid, usr.UserName.c_str());
+            mu_label(ctx, usr.UserName.c_str());
             if (mu_button(ctx, "Options"))
             {
 
             }
             mu_pop_id(ctx);
+            mu_pop_id(ctx);
+        };
+        renderChannel = [&](uint16_t cid)
+        {
+            const Channel& child = localChannelMap[cid];
+            mu_push_id(ctx, &cid, sizeof(cid));
+            mu_layout_row(ctx, 2, std::array<int, 2>{-180, 0}.data(), 0);
+            bool joinAction = false;
+            //mu_label(ctx, child.channelName.c_str());
+            mu_layout_begin_column(ctx);
+            if (mu_begin_treenode_ex(ctx, child.channelName.c_str(), MU_OPT_EXPANDED))
+            {
+                for (const auto& [uid, user] : localUserMap)
+                {
+                    if (user.channelId == cid)
+                        renderUser(uid, cid);
+                }
+
+                for (auto& [childId, child] : localChannelMap)
+                {
+                    if (childId == cid || !child.hasParent) continue;  
+                    else if (child.channelParent == cid)
+                    {
+                        renderChannel(childId);
+                    }
+                }
+                mu_end_treenode(ctx);
+            }
+            mu_layout_end_column(ctx);
+            mu_layout_begin_column(ctx);
+
+            mu_layout_row(ctx, 2, std::array<int, 2>{0, 0}.data(), 0);
+            
+            if (mu_button(ctx, "Join"))
+                joinAction = true;
+
+            if (mu_button(ctx, "Options"))
+                mu_open_popup(ctx, "channeloptionspopup");
+
+            if (mu_begin_popup(ctx, "channeloptionspopup"))
+            {
+                if (mu_button(ctx, "Join Channel"))
+                    joinAction = true;
+                mu_end_popup(ctx);
+            }
+            if (joinAction)
+                under_->JoinChannel(cid);
+            mu_layout_end_column(ctx);
+            mu_pop_id(ctx);
+        };  
+        for (const auto& [cid, chan] : localChannelMap)
+        {
+            if (!chan.hasParent)
+                renderChannel(cid);
+            continue;
         }
         mu_end_panel(ctx);
         mu_layout_row(ctx, 1, std::array<int, 1>{-1}.data(), -30);

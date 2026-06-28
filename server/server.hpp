@@ -25,7 +25,7 @@ private:
 
     RPC4 rpc4;
     
-    RakNet::Packet *packet;
+    //RakNet::Packet *packet;
     
     
     std::mutex listMutex;
@@ -38,6 +38,9 @@ private:
 
     bool isGuidRegistered(RakNetGUID guid_);
 
+    void DropUser(RakChatUser* usr);
+    
+
     RakChatUserPool userPool;
     ChannelPool channelPool;
     RakChatChannel* rootPtr = nullptr;
@@ -47,5 +50,7 @@ public:
 
     RakChatServer();
     ~RakChatServer();
+    int Init();
+    void Stop();
 };
 

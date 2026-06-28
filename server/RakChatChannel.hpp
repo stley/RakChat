@@ -6,6 +6,7 @@
 #include "RakNetTypes.h"
 #include "PacketPriority.h"
 #include "BitStream.h"
+#include <mutex>
 
 #include <unordered_map>
 
@@ -13,7 +14,8 @@ enum LeaveTypes : uint8_t
 {
     LEAVE_UNDEFINED = 0x00,
     LEAVE_GRACEFULLY,
-    LEAVE_KICKED
+    LEAVE_KICKED,
+    LEAVE_DROP
 };
 
 class RakChatUser;
@@ -24,13 +26,16 @@ class RakChatChannel
 {
     
 private:
+
     std::string name_;
     std::string password_ = "nil";
     std::unordered_set<RakChatUser*> users_;
+    mutable std::mutex pSetMutex;
+
     uint32_t capacity_ = 0;
     RakChatChannel* channel_parent = nullptr; // nullptr means it is not a subchannel
 public:
-    RakChatChannel(const char* name, const char* password = nullptr, uint32_t capacity = 0);
+    RakChatChannel(const char* name, RakChatChannel* parent = nullptr, const char* password = nullptr, uint32_t capacity = 0);
     ~RakChatChannel();
     RakChatChannel* GetParent() const  { return channel_parent; }
     const std::string& Name() const { return name_; }
@@ -55,7 +60,7 @@ private:
     std::unordered_map<uint16_t, RakChatChannel> channels_;
 public:
     [[nodiscard]] const std::unordered_map<uint16_t, RakChatChannel>& GetList() { return channels_; }
-    uint16_t CreateChannel(const RakChatChannel& channel);
+    uint16_t CreateChannel(const char* name, RakChatChannel* parent, const char* password, uint32_t capacity);
     bool DeleteChannel(uint16_t channel_id);
     uint16_t toID(RakChatChannel* chanPtr) const
     {

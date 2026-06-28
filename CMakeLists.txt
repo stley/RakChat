@@ -21,6 +21,8 @@ add_subdirectory(opus)
 add_subdirectory(portaudio)
 add_subdirectory(SDL)
 
+set(CMAKE_CXX_FLAGS_DEBUG "/Zi /Od")
+
 target_include_directories(raknet PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/RakNet/Source
 )
@@ -126,4 +128,6 @@ target_include_directories(SpeakeasyClient PRIVATE
 
 target_include_directories(SpeakeasyServer PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/common)
+
+
 
